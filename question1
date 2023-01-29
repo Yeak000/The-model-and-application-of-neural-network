@@ -1,0 +1,187 @@
+import numpy as np
+from tqdm import tqdm
+from numpy import exp,pi,sqrt,mean,max,min
+from scipy.integrate import dblquad,quad
+from scipy import special
+import matplotlib.pyplot as plt
+# V = -70
+# V_r = -70
+# V_th = -50
+# T_ref = 2
+# m = 10
+# sigma = 1
+# g = 1 / 5
+# mu = g * (V_r-V_th) / (1 - np.exp(g*(m-T_ref))) + V_th*g
+# # mu1 = g * (V_th-V_r*exp(-g*(m-T_ref))) / (1 - np.exp(-g*(m-T_ref)))
+# sigma1 = 1
+# delta_t = 0.01
+T_list=[]
+
+def simu():
+    T_list=[]
+    V_list=[]
+    for _ in tqdm(range(1000)):
+        count = 0
+        V = V_r
+        while V < V_th:
+            count += 1
+            V += -g * V * delta_t + mu * delta_t + sigma1 * np.sqrt(delta_t) * np.random.normal()
+            V_list.append(V)
+        T_list.append(delta_t*count)
+    return T_list,V_list
+
+
+
+def DD(x):
+    return quad(ff, -np.inf, x)[0]*exp(x*x)
+
+def ff(x):
+    return pi/4*special.erfcx(-x)**2*exp(-x*x)
+
+def D_x(x):
+    return sqrt(pi)/2*special.erfcx(-x)
+
+def fxy(x,y):
+    return exp(x*x)*pi/4*special.erfcx(-y)**2*exp(-y*y)
+
+def h(x):
+    return x
+
+def get_I(v, mu, sigma):
+    return (v*g-mu)/np.sqrt(g)/sigma
+
+def get_L(x):
+    mu,sigma1 = x
+    E1 = get_E(mu,sigma1)
+    VAR = Var(mu,sigma1)
+    return E1+VAR
+
+def Var(mu,sigma,vr=-70,vth=-50):
+    s_l = []
+    I_low = get_I(vr, mu, sigma)
+    I_high = get_I(vth, mu, sigma)
+    for i in np.linspace(I_low, I_high, 1000):
+        s_l.append(quad(ff, -np.inf, i)[0] * exp(i * i) * 8 / g / g)
+    a_l = np.asarray(s_l)
+    s = (np.ones(1000) * (I_high - I_low) / 1000) @ a_l
+    return s
+
+def get_E(mu,sigma,vr=-70,vth=-50):
+    i_l = get_I(vr, mu, sigma)
+    i_h = get_I(vth, mu, sigma)
+    return 2 / g *(quad(D_x, i_l, i_h)[0])
+
+def pipg(v, mu, sigma):
+    return (mu/sqrt(g)+v*sqrt(g))/2/sigma/g
+
+def pipmu(sigma):
+    return -1/sqrt(g)/sigma
+
+def pipsigma(v, mu, sigma):
+    return -(v*g-mu)/sqrt(g)/sigma/sigma
+
+# def f1(x):
+#     mu,sigma1 = x
+#     return get_E(mu,sigma1)-(m-T_ref)
+#
+# def f2(x):
+#     mu, sigma1 = x
+#     return Var(mu,sigma1) - sigma**2
+
+def get_g(x,vr=-70,vth=-50):
+    mu, sigma1 = x
+
+    i_l = get_I(vr, mu, sigma1)
+    i_h = get_I(vth, mu, sigma1)
+
+    E = get_E(mu,sigma1)
+    # print(E)
+    V = Var(mu, sigma1)
+    # print(V)
+    D_h, D_l = D_x(i_h), D_x(i_l)
+    DDh, DDl = DD(i_h), DD(i_l)
+
+    PIHPG = pipg(vth, mu, sigma1)
+    PILPG = pipg(vr, mu, sigma1)
+    PIPMU = pipmu(sigma1)
+    PIHPS = pipsigma(vth, mu, sigma1)
+    PILPS = pipsigma(vr, mu, sigma1)
+
+    pe_pg = -E/g + 2/g * (D_h*PIHPG - D_l*PILPG)
+    pe_pmu = 2/g * (D_h-D_l) * PIPMU
+    pe_psig = 2/g * (D_h * PIHPS - D_l * PILPS)
+
+    pv_pg = -2*V/g + 8/g/g*(DDh*PIHPG-DDl*PILPG)
+    pv_pmu = 8/g/g*(DDh-DDl)*PIPMU
+    pv_ps = 8/g/g*(DDh*PIHPS-DDl*PILPS)
+
+    plpg = 2*((E-m+T_ref)*pe_pg+(V-sigma*sigma)*pv_pg)
+    plpmu = 2*((E-m+T_ref)*pe_pmu+(V-sigma*sigma)*pv_pmu)
+    plsigma = 2*((E-m+T_ref)*pe_psig+(V-sigma*sigma)*pv_ps)
+    return np.asarray([plpmu, plsigma])
+
+def get_jac(x,vr=-70,vth=-50):
+    mu, sigma1 = x
+    i_l = get_I(vr, mu, sigma1)
+    i_h = get_I(vth, mu, sigma1)
+    D_h, D_l = D_x(i_h), D_x(i_l)
+    DDh, DDl = DD(i_h), DD(i_l)
+    PIPMU = pipmu(sigma1)
+    PIHPS = pipsigma(vth, mu, sigma1)
+    PILPS = pipsigma(vr, mu, sigma1)
+    pe_pmu = 2/g * (D_h-D_l) * PIPMU
+    pe_psig = 2/g * (D_h * PIHPS - D_l * PILPS)
+    pv_pmu = 8/g/g*(DDh-DDl)*PIPMU
+    pv_ps = 8/g/g*(DDh*PIHPS-DDl*PILPS)
+    return np.asarray([[pe_pmu,pe_psig],[pv_pmu,pv_ps]])
+
+def get_f(x):
+    mu, sigma1 = x
+    return np.asarray([get_E(mu,sigma1)-(m-T_ref),Var(mu,sigma1) - sigma**2])
+
+T_ref = 2
+m = 14
+sigma = 2
+V_r = -70
+V_th = -50
+delta_t = 0.01
+g = 1 / m /2
+mu = g * (V_r-V_th) / (1 - np.exp(g*(m-T_ref))) + V_th*g
+# mu1 = g * (V_th-V_r*exp(-g*(m-T_ref))) / (1 - np.exp(-g*(m-T_ref)))
+sigma1 = sigma
+
+delta = 0.1
+# bfgs_sig = 0.25
+epsilon = 1e-8
+
+
+x = np.asarray([mu,sigma1])
+for i in range(20):
+    mu, sigma1 = x
+    print(x)
+    # E = get_E(mu, sigma1)
+    # V = Var(mu, sigma1)
+    f_xy = get_f(x)
+    Jacobi = get_jac(x)
+    deltax = -np.linalg.solve(Jacobi,f_xy)
+    if np.linalg.norm(deltax) <= epsilon:
+        break
+    x += deltax
+    f_newxy = get_f(x)
+    if np.linalg.norm(f_newxy,1) <= epsilon:
+        break
+    print(f_newxy)
+
+mu, sigma1 = x
+print(get_E(mu, sigma1))
+print(Var(mu, sigma1))
+
+
+
+T_l,V_l = simu()
+plt.plot(0.01*np.arange(20000),V_l[:20000])
+plt.xlabel('t/ms')
+plt.ylabel('V/mV')
+plt.title(f'm={m},sigma={sigma}')
+
+
